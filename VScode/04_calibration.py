@@ -184,7 +184,7 @@ while True:
 
         # 오프셋 계산
         # 로봇 홈 x 위치 (FK 결과)
-        robot_home_x = 19.5   # fk(0,0,0) 의 x 값
+        robot_home_x = 13.0   # fk(0,0,0) 의 x 값
         robot_home_y = 0.0    # fk(0,0,0) 의 y 값
 
         offset_x = robot_home_x + dy_cm
