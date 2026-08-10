@@ -107,9 +107,6 @@ cap = cv2.VideoCapture(URL)
 if not cap.isOpened():
     print('카메라 연결 실패')
     exit()
-    
-cv2.namedWindow('Calibration', cv2.WINDOW_NORMAL)
-cv2.resizeWindow('Calibration', 800, 600)
 
 # FK 홈 위치 계산
 import sys
@@ -137,40 +134,36 @@ while True:
     if px_per_cm and origin_px:
         cv2.putText(frame,
             f'Scale: {px_per_cm:.1f} px/cm',
-            (10, h - 100), cv2.FONT_HERSHEY_SIMPLEX,
-            0.8, (255,255,0), 2)
+            (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+            0.6, (255,255,0), 2)
         cv2.circle(frame, origin_px, 8, (0,255,0), -1)
-    
+        cv2.putText(frame, 'Marker0',
+            (origin_px[0]+10, origin_px[1]),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5, (0,255,0), 1)
 
         if obj_px:
             cv2.circle(frame, obj_px, 10, (0,0,255), -1)
             dx_cm = (obj_px[0] - origin_px[0]) / px_per_cm
             dy_cm = (obj_px[1] - origin_px[1]) / px_per_cm
             cv2.putText(frame,
-                f'Marker: dx={dx_cm:.1f} cm, dy={dy_cm:.1f} cm',
-                (10, h - 70), cv2.FONT_HERSHEY_SIMPLEX,
-                0.8, (0,0,255), 2)
+                f'marker 기준: dx={dx_cm:.1f} dy={dy_cm:.1f}',
+                (10, 60), cv2.FONT_HERSHEY_SIMPLEX,
+                0.6, (0,0,255), 2)
 
-        # 측정 횟수 표시
+    # 측정 횟수 표시
     if offset_samples:
-        avg_x = sum(s[0] for s in offset_samples) / len(offset_samples)
-        avg_y = sum(s[1] for s in offset_samples) / len(offset_samples)
+        avg_x = sum(s[0] for s in offset_samples)/len(offset_samples)
+        avg_y = sum(s[1] for s in offset_samples)/len(offset_samples)
+        cv2.putText(frame,
+            f'측정 {len(offset_samples)}회 | '
+            f'OFFSET_X={avg_x:.1f} OFFSET_Y={avg_y:.1f}',
+            (10, 90), cv2.FONT_HERSHEY_SIMPLEX,
+            0.6, (0,255,0), 2)
 
-        cv2.putText(
-            frame,
-            f'Samples: {len(offset_samples)} | '
-            f'OFFSET_X={avg_x:.1f}, OFFSET_Y={avg_y:.1f}',
-            (10, h - 40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8, (0, 255, 0), 2
-        )
-
-    status = (
-        'Need marker 0' if not px_per_cm
-        else 'Need blue object' if not obj_px
-        else 'SPACE: measure   S: save   Q: quit'
-    )
-    
+    status = 'ArUco 마커 필요' if not px_per_cm \
+        else '파란 물체 필요' if not obj_px \
+        else 'SPACE: 측정  S: 저장  Q: 종료'
     cv2.putText(frame, status,
         (10, h-15), cv2.FONT_HERSHEY_SIMPLEX,
         0.5, (200,200,200), 1)
