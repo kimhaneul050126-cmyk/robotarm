@@ -10,8 +10,8 @@ from time import sleep_ms, ticks_ms, ticks_diff
 # 1. WiFi STA + Central Server Auto Register
 # ══════════════════════════════════════════════════════════
 # 핸드폰 핫스팟 / 공유기 정보
-WIFI_SSID     = 'yeomjihun'
-WIFI_PASSWORD = 'yeom1227'
+WIFI_SSID     = 'kimhaneul'
+WIFI_PASSWORD = '00000000'
 
 # 중앙 서버 노트북 정보
 # 예: 노트북 IP가 172.20.10.2이면 SERVER_IP = '172.20.10.2'
