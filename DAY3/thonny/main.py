@@ -1,8 +1,10 @@
-# ESP32 MicroPython용 main.py
-# PCA9685 + USB 시리얼 로봇팔 제어
+# ESP32 MicroPython main.py
+# PC에서 A:90,90,90,90,90,90 형식으로 명령 수신
 
-from machine import Pin, SoftI2C
-import time
+from machine import I2C, Pin
+from pca9685 import PCA9685
+from utime import sleep_ms
+import config
 import sys
 
 try:
@@ -11,135 +13,108 @@ except ImportError:
     import uselect as select
 
 
-# =====================================================
-# PCA9685 설정
-# =====================================================
+# ─────────────────────────────────────────
+# PCA9685 초기화
+# ─────────────────────────────────────────
 
-SDA_PIN = 21
-SCL_PIN = 22
-PCA9685_ADDRESS = 0x40
-SERVO_FREQUENCY = 50
+i2c = I2C(
+    0,
+    scl=Pin(config.I2C_SCL),
+    sda=Pin(config.I2C_SDA),
+    freq=400_000
+)
 
-# 노트북의 각도 순서
-# 0: 베이스
-# 1: 어깨
-# 2: 팔꿈치
-# 3: 손목 좌우 회전
-# 4: 손목 상하
-# 5: 그리퍼
-SERVO_CHANNELS = [0, 1, 2, 3, 4, 5]
+devices = i2c.scan()
+print("I2C devices:", [hex(device) for device in devices])
 
-# 서보 보호를 위한 각도 제한
-SERVO_MIN_ANGLES = [10, 10, 10, 10, 10, 10]
-SERVO_MAX_ANGLES = [170, 170, 170, 170, 170, 170]
+if config.PCA_ADDR not in devices:
+    print("ERROR: PCA9685 not found")
+    print("Expected address:", hex(config.PCA_ADDR))
 
-# 일반적인 서보 펄스 범위
-# 서보 모델에 따라 조절이 필요할 수 있음
-SERVO_MIN_PULSE_US = 600
-SERVO_MAX_PULSE_US = 2400
+    while True:
+        sleep_ms(1000)
+
+pca = PCA9685(i2c, config.PCA_ADDR)
+
+print("PCA9685 connected:", hex(config.PCA_ADDR))
 
 
-class PCA9685:
-    MODE1 = 0x00
-    MODE2 = 0x01
-    LED0_ON_L = 0x06
-    PRESCALE = 0xFE
+# PC에서 보내는 각도 순서
+# base, shoulder, elbow, wrist_r, wrist_p, gripper
+SERVO_ORDER = [
+    "base",
+    "shoulder",
+    "elbow",
+    "wrist_r",
+    "wrist_p",
+    "gripper"
+]
 
-    def __init__(self, i2c, address=0x40, frequency=50):
-        self.i2c = i2c
-        self.address = address
-        self.frequency = frequency
 
-        self._write_register(self.MODE1, 0x00)
-        self._write_register(self.MODE2, 0x04)
+NAME_TO_INDEX = {
+    servo["name"]: index
+    for index, servo in enumerate(config.SERVO)
+}
 
-        time.sleep_ms(10)
-        self.set_frequency(frequency)
 
-    def _write_register(self, register, value):
-        self.i2c.writeto_mem(
-            self.address,
-            register,
-            bytes([value & 0xFF])
+def clamp(value, minimum, maximum):
+    return max(minimum, min(maximum, value))
+
+
+def write_servo(name, degree):
+    """
+    config.py의 채널, 방향, 오프셋, 펄스폭을 적용해 서보를 움직입니다.
+    """
+
+    if name not in NAME_TO_INDEX:
+        print("Unknown servo:", name)
+        return
+
+    index = NAME_TO_INDEX[name]
+    servo_config = config.SERVO[index]
+
+    # config.py에 기록된 안전 각도 범위
+    degree = clamp(
+        int(degree),
+        servo_config["min_deg"],
+        servo_config["max_deg"]
+    )
+
+    # 방향 및 중앙 오프셋 적용
+    absolute_degree = (
+        90
+        + servo_config["dir"] * (degree - 90)
+        + servo_config["offset"]
+    )
+
+    absolute_degree = clamp(absolute_degree, 0, 180)
+
+    # 각도를 서보 펄스폭으로 변환
+    pulse_us = int(
+        servo_config["min_us"]
+        + (
+            servo_config["max_us"]
+            - servo_config["min_us"]
         )
+        * absolute_degree
+        / 180
+    )
 
-    def _read_register(self, register):
-        data = self.i2c.readfrom_mem(
-            self.address,
-            register,
-            1
-        )
-        return data[0]
+    channel = config.SERVO_CH[index]
+    pca.set_us(channel, pulse_us)
 
-    def set_frequency(self, frequency):
-        prescale_value = (
-            25000000.0 / (4096.0 * frequency)
-        ) - 1.0
 
-        prescale = int(prescale_value + 0.5)
+def move_all(angles):
+    if len(angles) != 6:
+        return
 
-        old_mode = self._read_register(self.MODE1)
-        sleep_mode = (old_mode & 0x7F) | 0x10
-
-        self._write_register(self.MODE1, sleep_mode)
-        self._write_register(self.PRESCALE, prescale)
-        self._write_register(self.MODE1, old_mode)
-
-        time.sleep_ms(5)
-
-        # Restart + Auto Increment + All Call
-        self._write_register(self.MODE1, old_mode | 0xA1)
-
-    def set_pwm(self, channel, on_count, off_count):
-        register = self.LED0_ON_L + (4 * channel)
-
-        data = bytearray(4)
-        data[0] = on_count & 0xFF
-        data[1] = (on_count >> 8) & 0x0F
-        data[2] = off_count & 0xFF
-        data[3] = (off_count >> 8) & 0x0F
-
-        self.i2c.writeto_mem(
-            self.address,
-            register,
-            data
-        )
-
-    def set_servo_angle(
-        self,
-        channel,
-        angle,
-        minimum_angle=10,
-        maximum_angle=170
-    ):
-        # 서보의 안전 각도 범위로 제한
-        if angle < minimum_angle:
-            angle = minimum_angle
-
-        if angle > maximum_angle:
-            angle = maximum_angle
-
-        pulse_us = (
-            SERVO_MIN_PULSE_US
-            + (angle / 180.0)
-            * (SERVO_MAX_PULSE_US - SERVO_MIN_PULSE_US)
-        )
-
-        period_us = 1000000.0 / self.frequency
-        off_count = int((pulse_us / period_us) * 4096)
-
-        if off_count < 0:
-            off_count = 0
-
-        if off_count > 4095:
-            off_count = 4095
-
-        self.set_pwm(channel, 0, off_count)
+    for name, degree in zip(SERVO_ORDER, angles):
+        write_servo(name, degree)
 
 
 def parse_command(line):
     """
-    A:90,90,90,90,90,90 형식의 명령을 읽습니다.
+    A:90,90,90,90,90,90 형식을 숫자 목록으로 변환
     """
 
     line = line.strip()
@@ -150,83 +125,37 @@ def parse_command(line):
     values = line[2:].split(",")
 
     if len(values) != 6:
+        print("Invalid value count:", line)
         return None
 
     try:
         return [int(value) for value in values]
+
     except ValueError:
+        print("Invalid command:", line)
         return None
 
 
-def move_robot(angles):
-    for index in range(6):
-        channel = SERVO_CHANNELS[index]
+# ─────────────────────────────────────────
+# 시작할 때 전체 서보를 90도로 이동
+# ─────────────────────────────────────────
 
-        pca.set_servo_angle(
-            channel,
-            angles[index],
-            SERVO_MIN_ANGLES[index],
-            SERVO_MAX_ANGLES[index]
-        )
+print("Moving all servos to neutral position")
 
+for servo_name in SERVO_ORDER:
+    write_servo(servo_name, 90)
+    sleep_ms(100)
 
-# =====================================================
-# I2C 및 PCA9685 시작
-# =====================================================
-
-i2c = SoftI2C(
-    sda=Pin(SDA_PIN),
-    scl=Pin(SCL_PIN),
-    freq=400000
-)
-
-found_devices = i2c.scan()
-
-print("I2C devices:", [
-    hex(address) for address in found_devices
-])
-
-if PCA9685_ADDRESS not in found_devices:
-    print("ERROR: PCA9685 0x40 not found")
-    print("Check SDA=21, SCL=22, VCC and GND")
-
-    while True:
-        time.sleep(1)
+print("READY")
+print("Waiting for A:90,90,90,90,90,90")
 
 
-pca = PCA9685(
-    i2c,
-    address=PCA9685_ADDRESS,
-    frequency=SERVO_FREQUENCY
-)
-
-print("PCA9685 connected")
-
-
-# 시작할 때 로봇팔을 중앙 각도로 이동
-# 갑자기 움직일 수 있으므로 주의
-center_angles = [90, 90, 90, 90, 90, 90]
-
-for servo_index in range(6):
-    pca.set_servo_angle(
-        SERVO_CHANNELS[servo_index],
-        center_angles[servo_index],
-        SERVO_MIN_ANGLES[servo_index],
-        SERVO_MAX_ANGLES[servo_index]
-    )
-
-    # 한꺼번에 움직일 때 발생하는 전류를 조금 줄임
-    time.sleep_ms(100)
-
-
-# =====================================================
+# ─────────────────────────────────────────
 # USB 시리얼 명령 수신
-# =====================================================
+# ─────────────────────────────────────────
 
 poller = select.poll()
 poller.register(sys.stdin, select.POLLIN)
-
-print("READY: waiting for A:angle1,...,angle6")
 
 
 while True:
@@ -234,16 +163,17 @@ while True:
         events = poller.poll(50)
 
         if events:
-            line = sys.stdin.readline()
-            angles = parse_command(line)
+            received_line = sys.stdin.readline()
+            angles = parse_command(received_line)
 
             if angles is not None:
-                move_robot(angles)
+                move_all(angles)
+                print("RX:", angles)
 
     except KeyboardInterrupt:
-        print("Robot control stopped")
+        print("Stopped")
         break
 
     except Exception as error:
         print("ERROR:", error)
-        time.sleep_ms(100)
+        sleep_ms(100)
